@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InterPlanetary Delay Maker</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Segoe UI', Roboto, monospace;
+    background: #0a0e17;
+    color: #e0e6f0;
+    min-height: 100vh;
+  }
+  header { text-align: center; padding: 16px 20px 0; }
+  h1 { font-size: 1.3em; color: #7eb8da; letter-spacing: 2px; margin-bottom: 4px; }
+  .subtitle { color: #5a6a7a; font-size: 0.8em; margin-bottom: 12px; }
+
+  /* ── Tabs ─────────────────────────────────────────── */
+  .tabs { display: flex; justify-content: center; gap: 4px; padding: 0 20px 12px; border-bottom: 1px solid #1e2a3a; }
+  .tab-btn {
+    background: transparent; border: 1px solid transparent; border-radius: 8px 8px 0 0;
+    padding: 8px 24px; color: #5a7a9a; cursor: pointer; font-size: 0.85em;
+    font-weight: 600; letter-spacing: 0.5px; transition: all 0.15s;
+  }
+  .tab-btn:hover { color: #8aaaba; background: #111822; }
+  .tab-btn.active { color: #4a9eff; border-color: #1e2a3a; border-bottom-color: #0a0e17; background: #0a0e17; }
+  .tab-panel { display: none; padding: 20px; }
+  .tab-panel.active { display: block; }
+
+  /* ── Shared ──────────────────────────────────────── */
+  .container { max-width: 740px; margin: 0 auto; }
+  .section-label { font-size: 0.75em; color: #5a7a9a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .card { background: #141b2a; border: 1px solid #1e2a3a; border-radius: 10px; padding: 14px 8px; text-align: center; }
+  .card-label { font-size: 0.55em; color: #5a7a9a; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; line-height: 1.3; }
+  .card-value { font-size: 1.5em; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card-unit { font-size: 0.45em; color: #5a7a9a; margin-left: 2px; }
+  .earth { color: #4a9eff; } .mars { color: #ff6a4a; } .moon { color: #c8c8aa; }
+  .custom-c { color: #4adf8a; } .queue { color: #8a8aff; }
+  .hidden-section { display: none; }
+  .hidden-section.visible { display: block; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+
+  /* ── Visualization ───────────────────────────────── */
+  .vis { background: #141b2a; border: 1px solid #1e2a3a; border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; }
+  .vis-layout { display: flex; align-items: center; }
+  .vis-hub { flex-shrink: 0; margin-right: 10px; }
+  .vis-spokes { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  .vis-spoke { display: flex; align-items: center; }
+  .hidden-section.vis-spoke.visible { display: flex; }
+  .vis-node { text-align: center; width: 56px; flex-shrink: 0; }
+  .vis-node-dot { width: 18px; height: 18px; border-radius: 50%; margin: 0 auto 3px; border: 2px solid; }
+  .vis-node-label { font-size: 0.6em; font-weight: 600; letter-spacing: 0.5px; }
+  .vis-node-ip { font-size: 0.5em; color: #4a5a6a; }
+  .c-earth .vis-node-dot { background: #1a3060; border-color: #4a9eff; }
+  .c-earth .vis-node-label { color: #4a9eff; }
+  .c-mars .vis-node-dot { background: #3a1a10; border-color: #ff6a4a; }
+  .c-mars .vis-node-label { color: #ff6a4a; }
+  .c-moon .vis-node-dot { background: #2a2a1a; border-color: #c8c8aa; }
+  .c-moon .vis-node-label { color: #c8c8aa; }
+  .c-custom .vis-node-dot { background: #1a2a1a; border-color: #4adf8a; }
+  .c-custom .vis-node-label { color: #4adf8a; }
+
+  .vis-track { flex: 1; height: 54px; position: relative; margin: 0 10px; }
+  .vis-track-line { position: absolute; left: 0; right: 0; height: 1px; background: #2a3a4a; }
+  .vis-track-line.fwd-line { top: 14px; }
+  .vis-track-line.rev-line { top: 40px; }
+  .vis-lane { position: absolute; left: 0; right: 0; height: 10px; overflow: hidden; }
+  .vis-lane.fwd { top: 9px; }
+  .vis-lane.rev { top: 35px; }
+  .vis-delay-label {
+    position: absolute; left: 50%; transform: translate(-50%, -50%);
+    font-size: 0.55em; color: #5a7a9a; background: #141b2a; padding: 0 5px; white-space: nowrap;
+  }
+  .vis-delay-label.fwd-label { top: 14px; }
+  .vis-delay-label.rev-label { top: 40px; }
+
+  /* Packet dots: color by protocol type */
+  .pkt {
+    position: absolute;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    top: 2px;
+    opacity: 0.9;
+  }
+  .pkt.t-icmp { background: #4a9eff; box-shadow: 0 0 4px #4a9eff80; }
+  .pkt.t-icmpv6 { background: #4a9eff; box-shadow: none; border-radius: 0; clip-path: polygon(50% 0%, 0% 100%, 100% 100%); width: 8px; height: 8px; top: 1px; }
+  .pkt.t-arp { background: #ffcc00; box-shadow: 0 0 4px #ffcc0080; }
+  .pkt.t-otherarp { background: #ffa500; box-shadow: 0 0 4px #ffa50080; }
+  .pkt.t-tcp { background: #ff6a4a; box-shadow: 0 0 4px #ff6a4a80; }
+  .pkt.t-udp { background: #4adf8a; box-shadow: 0 0 4px #4adf8a80; }
+  .pkt.t-other { background: #888; box-shadow: 0 0 3px #88888880; }
+  /* Dot legend */
+  .dot-legend { display: flex; gap: 10px; padding: 4px 0 0; justify-content: center; }
+  .dot-legend span { font-size: 0.55em; color: #5a7a9a; display: flex; align-items: center; gap: 3px; }
+  .dot-legend i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+
+  /* ── Log Viewer ──────────────────────────────────── */
+  .log-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .log-filter {
+    background: transparent; border: 1px solid #1e2a3a; border-radius: 4px;
+    padding: 2px 8px; color: #5a7a9a; cursor: pointer; font-size: 0.7em; transition: all 0.15s;
+  }
+  .log-filter:hover { border-color: #3a5a8a; color: #8aaaba; }
+  .log-filter.active { border-color: #4a9eff; color: #4a9eff; background: #0f1a30; }
+  .log-box {
+    background: #0d1117; border: 1px solid #1e2a3a; border-radius: 8px;
+    padding: 10px 12px; font-family: 'SF Mono','Menlo','Consolas',monospace;
+    font-size: 0.7em; line-height: 1.5; color: #6a8a6a; height: 150px; overflow-y: auto;
+  }
+  .log-box .lt { color: #4a5a6a; }
+  .log-box .lm { color: #ff6a4a; }
+  .log-box .ln { color: #c8c8aa; }
+  .log-box .lc { color: #4adf8a; }
+  .log-box .ls { color: #8a8aff; }
+
+  /* ── Settings ────────────────────────────────────── */
+  .setting-block { background: #141b2a; border: 1px solid #1e2a3a; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+  .setting-block h3 { font-size: 0.75em; color: #5a7a9a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .mars-toggle { display: flex; gap: 8px; }
+  .mars-toggle button {
+    flex: 1; padding: 12px; border-radius: 8px; border: 2px solid #1e2a3a;
+    background: #0a0e17; color: #7a8a9a; cursor: pointer; font-size: 0.9em; font-weight: 600; transition: all 0.15s;
+  }
+  .mars-toggle button:hover { border-color: #3a5a8a; }
+  .mars-toggle button.active { border-color: #ff6a4a; color: #ff6a4a; background: #1a1210; }
+  .mars-toggle .toggle-sub { font-size: 0.75em; font-weight: 400; color: #5a6a7a; display: block; margin-top: 2px; }
+  .moon-toggle button { cursor: default; }
+  .moon-toggle button:hover { border-color: #1e2a3a; }
+  .moon-toggle button.active { border-color: #c8c8aa; color: #c8c8aa; background: #1a1a10; }
+  .input-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .input-group label { display: block; font-size: 0.7em; color: #7a8a9a; margin-bottom: 3px; }
+  .input-group input, .input-group select {
+    width: 100%; background: #0a0e17; border: 1px solid #1e2a3a; border-radius: 6px;
+    padding: 7px 10px; color: #e0e6f0; font-size: 0.9em; font-family: inherit;
+  }
+  .input-group input:focus, .input-group select:focus { outline: none; border-color: #4a9eff; }
+  .btn { border-radius: 8px; padding: 8px 20px; cursor: pointer; font-size: 0.85em; transition: all 0.15s; border: 1px solid; }
+  .btn-primary { background: #1a3a6a; border-color: #2a5a9a; color: #c0d8ff; }
+  .btn-primary:hover { background: #2a4a7a; }
+  .btn-danger { background: #3a1a1a; border-color: #6a2a2a; color: #ff8a8a; }
+  .btn-danger:hover { background: #4a2a2a; }
+  .btn-small { padding: 4px 12px; font-size: 0.75em; }
+  .mt-12 { margin-top: 12px; }
+  .ramp-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .ramp-badge { display: flex; align-items: center; gap: 8px; background: #0d1a2a; border: 1px solid #1e3a5a; border-radius: 6px; padding: 6px 10px; font-size: 0.75em; }
+  .ramp-badge .ramp-info { color: #8aaaba; }
+  .ramp-badge .ramp-val { color: #4a9eff; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* ── Commands ────────────────────────────────────── */
+  .origin-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .origin-bar label { font-size: 0.8em; color: #5a7a9a; }
+  .origin-bar select { background: #141b2a; border: 1px solid #1e2a3a; border-radius: 6px; padding: 6px 12px; color: #e0e6f0; font-size: 0.85em; font-family: inherit; }
+  .origin-bar select:focus { outline: none; border-color: #4a9eff; }
+  .cmd-list { background: #141b2a; border: 1px solid #1e2a3a; border-radius: 12px; padding: 16px 20px; }
+  .cmd-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding: 4px 0; }
+  .cmd-row:last-child { margin-bottom: 0; }
+  .cmd-label { font-size: 0.7em; color: #7a8a9a; min-width: 80px; flex-shrink: 0; }
+  .cmd-code { flex: 1; background: #0a0e17; border: 1px solid #1e2a3a; border-radius: 6px; padding: 6px 10px; font-family: 'SF Mono','Menlo',monospace; font-size: 0.72em; color: #a0b0c0; overflow-x: auto; white-space: nowrap; }
+  .copy-btn { background: #1a2a3a; border: 1px solid #2a3a4a; border-radius: 6px; padding: 4px 10px; color: #8a9aaa; cursor: pointer; font-size: 0.7em; transition: all 0.15s; flex-shrink: 0; }
+  .copy-btn:hover { background: #2a3a5a; color: #c0d0e0; }
+  .copy-btn.copied { background: #1a3a2a; border-color: #2a6a3a; color: #4adf8a; }
+
+  .status-bar { text-align: center; font-size: 0.7em; color: #3a4a5a; padding: 12px; }
+  .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #2a6a2a; margin-right: 4px; vertical-align: middle; }
+  .status-dot.error { background: #8a2a2a; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>INTERPLANETARY DELAY MAKER</h1>
+  <p class="subtitle">L2 Network Delay Emulator &mdash; WIDE Project Space-WG</p>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('status')">Status</button>
+  <button class="tab-btn" onclick="switchTab('settings')">Settings</button>
+  <button class="tab-btn" onclick="switchTab('commands')">Commands</button>
+</div>
+
+<!-- ═══ STATUS TAB ════════════════════════════════════════════════════════ -->
+<div class="tab-panel active" id="tab-status">
+<div class="container">
+
+  <div class="vis">
+    <div class="vis-layout">
+      <div class="vis-node c-earth vis-hub">
+        <div class="vis-node-dot"></div>
+        <div class="vis-node-label">EARTH</div>
+      </div>
+      <div class="vis-spokes">
+        <div class="vis-spoke" id="vis-mars-link">
+          <div class="vis-track">
+            <div class="vis-track-line fwd-line"></div>
+            <div class="vis-track-line rev-line"></div>
+            <div class="vis-lane fwd" id="mars-fwd"></div>
+            <div class="vis-lane rev" id="mars-rev"></div>
+            <div class="vis-delay-label fwd-label" id="mars-fwd-delay">--</div>
+            <div class="vis-delay-label rev-label" id="mars-rev-delay">--</div>
+          </div>
+          <div class="vis-node c-mars"><div class="vis-node-dot"></div><div class="vis-node-label">MARS</div><div class="vis-node-ip">10.0.0.3</div></div>
+        </div>
+        <div class="vis-spoke hidden-section" id="vis-moon-link">
+          <div class="vis-track">
+            <div class="vis-track-line fwd-line"></div>
+            <div class="vis-track-line rev-line"></div>
+            <div class="vis-lane fwd" id="moon-fwd"></div>
+            <div class="vis-lane rev" id="moon-rev"></div>
+            <div class="vis-delay-label fwd-label" id="moon-fwd-delay">--</div>
+            <div class="vis-delay-label rev-label" id="moon-rev-delay">--</div>
+          </div>
+          <div class="vis-node c-moon"><div class="vis-node-dot"></div><div class="vis-node-label">MOON</div><div class="vis-node-ip">10.1.0.3</div></div>
+        </div>
+        <div class="vis-spoke hidden-section" id="vis-custom-link">
+          <div class="vis-track">
+            <div class="vis-track-line fwd-line"></div>
+            <div class="vis-track-line rev-line"></div>
+            <div class="vis-lane fwd" id="custom-fwd"></div>
+            <div class="vis-lane rev" id="custom-rev"></div>
+            <div class="vis-delay-label fwd-label" id="custom-fwd-delay">--</div>
+            <div class="vis-delay-label rev-label" id="custom-rev-delay">--</div>
+          </div>
+          <div class="vis-node c-custom"><div class="vis-node-dot"></div><div class="vis-node-label">CUSTOM</div><div class="vis-node-ip">10.2.0.3</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="dot-legend">
+      <span><i style="background:#ffcc00"></i>ARP</span>
+      <span><i style="background:#ffa500"></i>otherARP</span>
+      <span><i style="background:#4a9eff"></i>ICMP</span>
+      <span><i style="background:#4a9eff;clip-path:polygon(50% 0%,0% 100%,100% 100%);border-radius:0;width:8px;height:8px"></i>ICMPv6 (non-mgmt)</span>
+      <span><i style="background:#ff6a4a"></i>TCP</span>
+      <span><i style="background:#4adf8a"></i>UDP</span>
+      <span><i style="background:#888"></i>Other</span>
+    </div>
+  </div>
+
+  <!-- Mars Cards -->
+  <div class="section-label">Mars Link</div>
+  <div class="grid">
+    <div class="card"><div class="card-label">Delay<br>Earth &rarr; Mars</div><div class="card-value earth" id="delay-mars">--</div></div>
+    <div class="card"><div class="card-label">Delay<br>Mars &rarr; Earth</div><div class="card-value mars" id="delay-earth">--</div></div>
+    <div class="card"><div class="card-label">Queue<br>to Mars</div><div class="card-value queue" id="queue-mars">--</div></div>
+    <div class="card"><div class="card-label">Queue<br>to Earth</div><div class="card-value queue" id="queue-earth">--</div></div>
+  </div>
+
+  <!-- Moon Cards -->
+  <div class="hidden-section" id="moon-section">
+    <div class="section-label">Moon Link</div>
+    <div class="grid">
+      <div class="card"><div class="card-label">Delay<br>Earth &rarr; Moon</div><div class="card-value moon" id="delay-moon">--</div></div>
+      <div class="card"><div class="card-label">Delay<br>Moon &rarr; Earth</div><div class="card-value moon" id="delay-from-moon">--</div></div>
+      <div class="card"><div class="card-label">Queue<br>to Moon</div><div class="card-value queue" id="queue-moon">--</div></div>
+      <div class="card"><div class="card-label">Queue<br>to Earth</div><div class="card-value queue" id="queue-from-moon">--</div></div>
+    </div>
+  </div>
+
+  <!-- Custom Cards -->
+  <div class="hidden-section" id="custom-section">
+    <div class="section-label">Custom Link</div>
+    <div class="grid">
+      <div class="card"><div class="card-label">Delay<br>Earth &rarr; Custom</div><div class="card-value custom-c" id="delay-custom">--</div></div>
+      <div class="card"><div class="card-label">Delay<br>Custom &rarr; Earth</div><div class="card-value custom-c" id="delay-from-custom">--</div></div>
+      <div class="card"><div class="card-label">Queue<br>to Custom</div><div class="card-value queue" id="queue-custom">--</div></div>
+      <div class="card"><div class="card-label">Queue<br>to Earth</div><div class="card-value queue" id="queue-from-custom">--</div></div>
+    </div>
+  </div>
+
+  <!-- Log Viewer with filters -->
+  <div class="log-header">
+    <span class="section-label" style="margin-bottom:0">Activity Log</span>
+    <button class="log-filter active" data-cat="all" onclick="setLogFilter('all',this)">All</button>
+    <button class="log-filter" data-cat="mars" onclick="setLogFilter('mars',this)">Mars</button>
+    <button class="log-filter" data-cat="moon" onclick="setLogFilter('moon',this)">Moon</button>
+    <button class="log-filter" data-cat="custom" onclick="setLogFilter('custom',this)">Custom</button>
+    <button class="log-filter" data-cat="settings" onclick="setLogFilter('settings',this)">Settings</button>
+  </div>
+  <div class="log-box" id="log-box"></div>
+
+  <!-- Packet Capture Log -->
+  <div class="log-header" style="margin-top:16px;">
+    <span class="section-label" style="margin-bottom:0">Packet Capture</span>
+    <button class="log-filter active" data-pkt="all" onclick="setPktFilter('all',this)">All</button>
+    <button class="log-filter" data-pkt="mars" onclick="setPktFilter('mars',this)">Mars</button>
+    <button class="log-filter" data-pkt="moon" onclick="setPktFilter('moon',this)">Moon</button>
+    <button class="log-filter" data-pkt="custom" onclick="setPktFilter('custom',this)">Custom</button>
+  </div>
+  <div class="log-box" id="pkt-log-box" style="height:180px;font-size:0.65em;"></div>
+
+</div>
+</div>
+
+<!-- ═══ SETTINGS TAB ══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="tab-settings">
+<div class="container">
+  <div class="setting-block">
+    <h3>Mars Delay</h3>
+    <div class="mars-toggle">
+      <button id="btn-mars-close" onclick="setMarsPreset('mars_close')">Closest<span class="toggle-sub">182s (3m 2s)</span></button>
+      <button id="btn-mars-far" onclick="setMarsPreset('mars_far')">Farthest<span class="toggle-sub">1338s (22m 18s)</span></button>
+      <button id="btn-mars-demo" onclick="setMarsPreset('demo')">Demo<span class="toggle-sub">5s</span></button>
+    </div>
+  </div>
+  <div class="setting-block hidden-section" id="settings-moon">
+    <h3>Moon Delay</h3>
+    <div class="mars-toggle moon-toggle">
+      <button class="active" id="moon-btn"><span id="moon-val">1.28s</span><span class="toggle-sub">one-way (fixed)</span></button>
+    </div>
+  </div>
+  <div class="setting-block hidden-section" id="settings-custom">
+    <h3>Custom Delay</h3>
+    <div class="input-grid">
+      <div class="input-group"><label>Earth &rarr; Custom (s)</label><input type="number" id="input-custom-fwd" min="0" step="0.1" placeholder="seconds"></div>
+      <div class="input-group"><label>Custom &rarr; Earth (s)</label><input type="number" id="input-custom-rev" min="0" step="0.1" placeholder="seconds"></div>
+    </div>
+    <button class="btn btn-primary mt-12" onclick="applyCustomDelay()">Apply</button>
+  </div>
+  <div class="setting-block">
+    <h3>Dynamic Delay</h3>
+    <div class="input-grid">
+      <div class="input-group"><label>Target Link</label>
+        <select id="ramp-link">
+          <option value="to_mars">Mars (Earth &rarr; Mars)</option>
+          <option value="to_earth">Mars (Mars &rarr; Earth)</option>
+          <option value="to_custom">Custom (Earth &rarr; Custom)</option>
+          <option value="from_custom">Custom (Custom &rarr; Earth)</option>
+        </select>
+      </div>
+      <div class="input-group"><label>Mode</label>
+        <select id="ramp-mode" onchange="updateDeltaUnit()">
+          <option value="amount">Amount</option>
+          <option value="rate">Rate</option>
+        </select>
+      </div>
+      <div class="input-group"><label>From (s)</label><input type="number" id="ramp-from" min="0" step="1" placeholder="start delay"></div>
+      <div class="input-group"><label>To (s)</label><input type="number" id="ramp-to" min="0" step="1" placeholder="end delay"></div>
+      <div class="input-group"><label>Delta per second</label>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button type="button" class="btn btn-small" id="delta-dir-btn" onclick="toggleDeltaDir()" style="min-width:28px;font-size:1em;padding:6px 8px;font-weight:700;">+</button>
+          <input type="number" id="ramp-step" min="0" step="0.1" placeholder="value" style="flex:1;">
+          <span id="delta-unit" style="color:#5a7a9a;font-size:0.85em;white-space:nowrap;">s/sec</span>
+        </div>
+      </div>
+      <div class="input-group"><label>Interval (s)</label><input type="number" id="ramp-interval" value="1" min="0.1" step="0.1"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="btn btn-primary" onclick="startRamp()">Start</button>
+      <button class="btn btn-danger" onclick="clearAllRamps()">Clear All</button>
+    </div>
+    <div class="ramp-badges" id="ramp-badges"></div>
+  </div>
+  <div class="setting-block">
+    <h3>Maintenance</h3>
+    <p style="font-size:0.8em;color:#5a6a7a;margin-bottom:10px;">Clear all packet queues in Redis. Delay config values are preserved.</p>
+    <button class="btn btn-danger" onclick="flushQueues()">Flush All Queues</button>
+    <span id="flush-result" style="font-size:0.8em;color:#4adf8a;margin-left:10px;"></span>
+  </div>
+</div>
+</div>
+
+<!-- ═══ COMMANDS TAB ══════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="tab-commands">
+<div class="container">
+  <div class="origin-bar">
+    <label>Origin:</label>
+    <select id="origin-select" onchange="renderCommands()">
+      <option value="earth">Earth (10.0.0.2)</option>
+      <option value="mars">Mars (10.0.0.3)</option>
+      <option value="moon">Moon (10.1.0.3)</option>
+      <option value="custom">Custom (10.2.0.3)</option>
+    </select>
+  </div>
+  <div class="cmd-list" id="cmd-list"></div>
+</div>
+</div>
+
+<div class="status-bar">
+  <span class="status-dot" id="status-dot"></span>
+  <span id="status-text">Connecting...</span>
+</div>
+
+<script>
+const MAX_PKTS = 30;
+const MAX_LOG = 80;
+let moonEnabled = false, customEnabled = false;
+let prevData = null;
+let logLines = [];  // {time, msg, cls, cat}
+let logFilter = 'all';
+
+// ── Tab Routing ────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab-btn[onclick*="'+name+'"]').classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+  location.hash = name;
+}
+(function(){ const h = location.hash.replace('#',''); if(['status','settings','commands'].includes(h)) switchTab(h); })();
+
+// ── Format ─────────────────────────────────────────
+function fmtD(s) {
+  if (s < 60) return s.toFixed(1)+'s';
+  return Math.floor(s/60)+'m '+(s%60).toFixed(0)+'s';
+}
+function fmtT() { return new Date().toLocaleTimeString('en-GB',{hour12:false}); }
+
+// ── Packet Visualization (position-based) ──────────
+// Pre-create packet dot elements per lane
+function initLane(id) {
+  const lane = document.getElementById(id);
+  if (!lane) return;
+  for (let i = 0; i < MAX_PKTS; i++) {
+    const el = document.createElement('div');
+    el.className = 'pkt';
+    el.style.display = 'none';
+    lane.appendChild(el);
+  }
+}
+['mars-fwd','mars-rev','moon-fwd','moon-rev','custom-fwd','custom-rev'].forEach(initLane);
+
+// Update a lane with real packet positions from API
+// positions: array of {p: progress 0.0→1.0, t: type string}
+// dir: 'fwd' (left→right) or 'rev' (right→left)
+function updateLane(laneId, positions, dir) {
+  const lane = document.getElementById(laneId);
+  if (!lane) return;
+  const dots = lane.querySelectorAll('.pkt');
+  dots.forEach((dot, i) => {
+    if (i < positions.length) {
+      const pkt = positions[i];
+      // fwd: progress 0 at left, 1 at right
+      // rev: progress 0 at right, 1 at left
+      const leftPct = dir === 'fwd' ? (pkt.p * 100) : ((1 - pkt.p) * 100);
+      dot.style.display = '';
+      dot.className = 'pkt t-' + pkt.t;
+      dot.style.left = leftPct + '%';
+    } else {
+      dot.style.display = 'none';
+    }
+  });
+}
+
+function updateVis(prefix, dFwd, dRev, pktsFwd, pktsRev) {
+  updateLane(prefix+'-fwd', pktsFwd || [], 'fwd');
+  updateLane(prefix+'-rev', pktsRev || [], 'rev');
+  const fwdLabel = document.getElementById(prefix+'-fwd-delay');
+  const revLabel = document.getElementById(prefix+'-rev-delay');
+  if (fwdLabel) fwdLabel.textContent = dFwd < 0.1 ? '→ disabled' : fmtD(dFwd) + ' →';
+  if (revLabel) revLabel.textContent = dRev < 0.1 ? '← disabled' : '← ' + fmtD(dRev);
+}
+
+// ── Log Viewer ─────────────────────────────────────
+function addLog(msg, cls, cat) {
+  logLines.push({time: fmtT(), msg, cls: cls||'', cat: cat||'all'});
+  if (logLines.length > MAX_LOG) logLines.shift();
+  renderLog();
+}
+function setLogFilter(cat, btn) {
+  logFilter = cat;
+  document.querySelectorAll('.log-filter').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderLog();
+}
+function renderLog() {
+  const box = document.getElementById('log-box');
+  const filtered = logFilter === 'all' ? logLines : logLines.filter(l => l.cat === logFilter);
+  box.innerHTML = filtered.map(l =>
+    '<div><span class="lt">'+l.time+'</span> <span class="'+l.cls+'">'+l.msg+'</span></div>'
+  ).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+function detectChanges(d) {
+  if (!prevData) return;
+  const checks = [
+    ['delay_to_mars','Delay Earth→Mars','lm','mars'],
+    ['delay_to_earth','Delay Mars→Earth','lm','mars'],
+    ['delay_to_moon','Delay Earth→Moon','ln','moon'],
+    ['delay_from_moon','Delay Moon→Earth','ln','moon'],
+    ['delay_to_custom','Delay Earth→Custom','lc','custom'],
+    ['delay_from_custom','Delay Custom→Earth','lc','custom'],
+  ];
+  checks.forEach(([key,label,cls,cat]) => {
+    const o = prevData[key], n = d[key];
+    if (o !== undefined && n !== undefined && Math.abs(o-n) > 0.01)
+      addLog(label+': '+fmtD(o)+' → '+fmtD(n), cls, cat);
+  });
+  [['queue_to_mars','Queue to Mars','lm','mars'],
+   ['queue_to_earth','Queue to Earth','lm','mars'],
+   ['queue_to_moon','Queue to Moon','ln','moon'],
+   ['queue_from_moon','Queue from Moon','ln','moon'],
+   ['queue_to_custom','Queue to Custom','lc','custom'],
+   ['queue_from_custom','Queue from Custom','lc','custom'],
+  ].forEach(([key,label,cls,cat]) => {
+    const o = prevData[key]||0, n = d[key]||0;
+    if (n > 0 && o === 0) addLog(label+': packets queued ('+n+')', cls, cat);
+    if (n === 0 && o > 0) addLog(label+': queue drained', cls, cat);
+  });
+}
+
+// ── Mars Toggle ────────────────────────────────────
+function updateMarsToggle(v) {
+  document.getElementById('btn-mars-close').classList.toggle('active', Math.abs(v-182)<1);
+  document.getElementById('btn-mars-far').classList.toggle('active', Math.abs(v-1338)<1);
+  document.getElementById('btn-mars-demo').classList.toggle('active', Math.abs(v-5)<1);
+}
+async function setMarsPreset(name) {
+  await fetch('/api/preset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  addLog('Preset: '+name, 'ls', 'settings');
+  fetchStatus();
+}
+
+// ── Custom Delay ───────────────────────────────────
+async function applyCustomDelay() {
+  const fwd = parseFloat(document.getElementById('input-custom-fwd').value);
+  const rev = parseFloat(document.getElementById('input-custom-rev').value);
+  const body = {};
+  if (!isNaN(fwd)) body.to_custom = fwd;
+  if (!isNaN(rev)) body.from_custom = rev;
+  if (prevData) { body.to_mars = prevData.delay_to_mars; body.to_earth = prevData.delay_to_earth; }
+  await fetch('/api/delay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  addLog('Custom delay applied', 'ls', 'settings');
+  fetchStatus();
+}
+
+// ── Ramp ───────────────────────────────────────────
+let deltaPositive = true;
+function toggleDeltaDir() {
+  deltaPositive = !deltaPositive;
+  const btn = document.getElementById('delta-dir-btn');
+  btn.textContent = deltaPositive ? '+' : '−';
+  btn.style.color = deltaPositive ? '#4adf8a' : '#ff6a4a';
+}
+function updateDeltaUnit() {
+  const mode = document.getElementById('ramp-mode').value;
+  document.getElementById('delta-unit').textContent = mode === 'rate' ? '%/sec' : 's/sec';
+}
+
+async function startRamp() {
+  const mode = document.getElementById('ramp-mode').value;
+  const stepVal = parseFloat(document.getElementById('ramp-step').value)||0;
+  const step = deltaPositive ? stepVal : -stepVal;
+  const body = {
+    link: document.getElementById('ramp-link').value,
+    mode: mode,
+    from: parseFloat(document.getElementById('ramp-from').value)||0,
+    to: parseFloat(document.getElementById('ramp-to').value)||0,
+    step: step,
+    interval: parseFloat(document.getElementById('ramp-interval').value)||1,
+  };
+  const res = await fetch('/api/ramp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if (!res.ok) { const t = await res.text(); addLog('Dynamic delay error: '+t, 'ls', 'settings'); return; }
+  const unit = mode==='rate' ? '%' : 's';
+  const sign = deltaPositive ? '+' : '−';
+  addLog('Dynamic delay started: '+body.link+' '+body.from+'→'+body.to+' ('+sign+stepVal+unit+'/sec)', 'ls', 'settings');
+  fetchRamps();
+}
+async function stopRamp(link) {
+  await fetch('/api/ramp?link='+encodeURIComponent(link),{method:'DELETE'});
+  addLog('Dynamic delay stopped: '+link, 'ls', 'settings');
+  fetchRamps();
+}
+async function fetchRamps() {
+  try {
+    const res = await fetch('/api/ramp');
+    const ramps = await res.json();
+    const box = document.getElementById('ramp-badges');
+    if (!ramps||ramps.length===0) { box.innerHTML='<span style="color:#3a4a5a;font-size:0.8em">No active dynamic delays</span>'; return; }
+    box.innerHTML = ramps.map(r =>
+      '<div class="ramp-badge"><span class="ramp-info">'+r.link+'</span>'+
+      '<span class="ramp-val">'+r.current.toFixed(1)+'s</span>'+
+      '<span style="color:#5a6a7a">→ '+r.target.toFixed(1)+'s</span>'+
+      '<button class="btn btn-danger btn-small" onclick="stopRamp(\''+r.link+'\')">Stop</button></div>'
+    ).join('');
+  } catch(e){}
+}
+
+// ── Flush Queues ────────────────────────────────────
+async function flushQueues() {
+  await fetch('/api/flush',{method:'POST'});
+  document.getElementById('flush-result').textContent='Flushed!';
+  setTimeout(()=>document.getElementById('flush-result').textContent='',2000);
+  addLog('All queues flushed', 'ls', 'settings');
+  fetchStatus();
+}
+
+// ── Clear All Ramps ────────────────────────────────
+async function clearAllRamps() {
+  await fetch('/api/ramp?link=all',{method:'DELETE'});
+  addLog('All dynamic delays cleared', 'ls', 'settings');
+  fetchRamps();
+}
+
+// ── Packet Capture Log ─────────────────────────────
+let pktFilter = 'all';
+let pktLogData = {};
+
+function setPktFilter(dir, btn) {
+  pktFilter = dir;
+  document.querySelectorAll('[data-pkt]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderPktLog();
+}
+
+async function fetchPktLog() {
+  try {
+    const res = await fetch('/api/pktlog');
+    pktLogData = await res.json();
+    renderPktLog();
+  } catch(e) {}
+}
+
+const pktFilterMap = {
+  all: ['to_mars','to_earth','to_moon','from_moon','to_custom','from_custom'],
+  mars: ['to_mars','to_earth'],
+  moon: ['to_moon','from_moon'],
+  custom: ['to_custom','from_custom']
+};
+const dirInfo = {
+  to_mars:   {src:'Earth', dst:'Mars'},   to_earth:  {src:'Mars',  dst:'Earth'},
+  to_moon:   {src:'Earth', dst:'Moon'},   from_moon: {src:'Moon',  dst:'Earth'},
+  to_custom: {src:'Earth', dst:'Custom'}, from_custom:{src:'Custom',dst:'Earth'}
+};
+const nodeColors = {Earth:'#4a9eff', Mars:'#ff6a4a', Moon:'#c8c8aa', Custom:'#4adf8a'};
+const typeColors = {arp:'#ffcc00',otherarp:'#ffa500',icmp:'#4a9eff',icmpv6:'#4a9eff',tcp:'#ff6a4a',udp:'#4adf8a',other:'#888'};
+
+function renderPktLog() {
+  const box = document.getElementById('pkt-log-box');
+  if (!box) return;
+  let entries = [];
+  const dirs = pktFilterMap[pktFilter] || ['to_mars','to_earth'];
+  dirs.forEach(dir => {
+    const logs = pktLogData[dir] || [];
+    logs.forEach(e => {
+      entries.push({ts: e.ts, dir: dir, size: e.size, type: e.type, desc: e.desc});
+    });
+  });
+  entries.sort((a,b) => b.ts - a.ts);
+  entries = entries.slice(0, 100);
+  box.innerHTML = entries.map(e => {
+    const t = new Date(e.ts).toLocaleTimeString('en-GB',{hour12:false})+'.'+String(e.ts%1000).padStart(3,'0');
+    const tc = typeColors[e.type]||'#888';
+    const di = dirInfo[e.dir];
+    const dirHtml = '<span style="color:'+nodeColors[di.src]+'">'+di.src+'</span>'+
+      '<span style="color:#5a7a9a">→</span>'+
+      '<span style="color:'+nodeColors[di.dst]+'">'+di.dst+'</span>';
+    return '<div><span class="lt">'+t+'</span> '+dirHtml+' '+
+      '<span style="color:'+tc+'">'+e.type.toUpperCase()+'</span> '+
+      '<span style="color:#5a6a7a">'+e.size+'B</span> '+
+      '<span style="color:#7a8a7a">'+escHtml(e.desc)+'</span></div>';
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+// ── Commands ───────────────────────────────────────
+const TARGETS = {
+  earth:[
+    {label:'Ping Mars',cmd:'docker exec earth ping 10.0.0.3'},
+    {label:'Ping Moon',cmd:'docker exec earth ping 10.1.0.3',need:'moon'},
+    {label:'Ping Custom',cmd:'docker exec earth ping 10.2.0.3',need:'custom'},
+    {label:'NC listen',cmd:'docker exec mars sh -c "nc -l -p 9000 > /tmp/received.jpg"'},
+    {label:'NC send',cmd:'docker exec earth sh -c "nc 10.0.0.3 9000 < /samples/mars_sol0.jpeg"'},
+    {label:'View logs',cmd:'docker compose logs -f delaybox'},
+  ],
+  mars:[{label:'Ping Earth',cmd:'docker exec mars ping 10.0.0.2'},{label:'View logs',cmd:'docker compose logs -f delaybox'}],
+  moon:[{label:'Ping Earth',cmd:'docker exec moon ping 10.1.0.2'},{label:'View logs',cmd:'docker compose logs -f delaybox'}],
+  custom:[{label:'Ping Earth',cmd:'docker exec custom ping 10.2.0.2'},{label:'View logs',cmd:'docker compose logs -f delaybox'}],
+};
+function renderCommands() {
+  const origin = document.getElementById('origin-select').value;
+  const list = document.getElementById('cmd-list');
+  list.innerHTML = (TARGETS[origin]||[])
+    .filter(c => !c.need||(c.need==='moon'&&moonEnabled)||(c.need==='custom'&&customEnabled))
+    .map(c => '<div class="cmd-row"><span class="cmd-label">'+c.label+'</span><code class="cmd-code">'+c.cmd+'</code><button class="copy-btn" onclick="copyCmd(this)">Copy</button></div>')
+    .join('');
+}
+function copyCmd(btn) {
+  const code = btn.previousElementSibling.textContent;
+  navigator.clipboard.writeText(code).then(()=>{
+    btn.textContent='Copied!'; btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('copied');},1500);
+  });
+}
+
+// ── Data Fetching ──────────────────────────────────
+async function fetchStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const d = await res.json();
+    detectChanges(d);
+    prevData = d;
+
+    // Mars
+    document.getElementById('delay-mars').innerHTML = fmtD(d.delay_to_mars);
+    document.getElementById('delay-earth').innerHTML = fmtD(d.delay_to_earth);
+    document.getElementById('queue-mars').innerHTML = d.queue_to_mars+'<span class="card-unit"> pkts</span>';
+    document.getElementById('queue-earth').innerHTML = d.queue_to_earth+'<span class="card-unit"> pkts</span>';
+    updateVis('mars', d.delay_to_mars, d.delay_to_earth, d.pkts_to_mars, d.pkts_to_earth);
+    updateMarsToggle(d.delay_to_mars);
+
+    // Moon
+    if (d.moon_enabled && !moonEnabled) {
+      moonEnabled = true;
+      ['moon-section','vis-moon-link','settings-moon'].forEach(id => document.getElementById(id).classList.add('visible'));
+    }
+    if (moonEnabled) {
+      document.getElementById('delay-moon').innerHTML = fmtD(d.delay_to_moon);
+      document.getElementById('delay-from-moon').innerHTML = fmtD(d.delay_from_moon);
+      document.getElementById('queue-moon').innerHTML = d.queue_to_moon+'<span class="card-unit"> pkts</span>';
+      document.getElementById('queue-from-moon').innerHTML = d.queue_from_moon+'<span class="card-unit"> pkts</span>';
+      updateVis('moon', d.delay_to_moon, d.delay_from_moon, d.pkts_to_moon, d.pkts_from_moon);
+      document.getElementById('moon-val').textContent = d.delay_to_moon.toFixed(2)+'s';
+    }
+
+    // Custom
+    if (d.custom_enabled && !customEnabled) {
+      customEnabled = true;
+      ['custom-section','vis-custom-link','settings-custom'].forEach(id => document.getElementById(id).classList.add('visible'));
+    }
+    if (customEnabled) {
+      document.getElementById('delay-custom').innerHTML = fmtD(d.delay_to_custom);
+      document.getElementById('delay-from-custom').innerHTML = fmtD(d.delay_from_custom);
+      document.getElementById('queue-custom').innerHTML = d.queue_to_custom+'<span class="card-unit"> pkts</span>';
+      document.getElementById('queue-from-custom').innerHTML = d.queue_from_custom+'<span class="card-unit"> pkts</span>';
+      updateVis('custom', d.delay_to_custom, d.delay_from_custom, d.pkts_to_custom, d.pkts_from_custom);
+    }
+    renderCommands();
+    document.getElementById('status-dot').className='status-dot';
+    document.getElementById('status-text').textContent='Connected | '+fmtT();
+  } catch(e) {
+    document.getElementById('status-dot').className='status-dot error';
+    document.getElementById('status-text').textContent='Error: '+e.message;
+  }
+}
+
+// ── Init ───────────────────────────────────────────
+renderCommands(); fetchStatus(); fetchRamps(); fetchPktLog();
+setInterval(fetchStatus, 1000);
+setInterval(fetchRamps, 2000);
+setInterval(fetchPktLog, 2000);
+</script>
+</body>
+</html>
