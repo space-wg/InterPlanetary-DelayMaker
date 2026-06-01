@@ -31,6 +31,268 @@ docker compose up -d --build
 
 ダッシュボードを開く: **http://localhost:8080**
 
+## 実機モード (bare-metal)
+
+3台の Linux マシン（例: R86S）をスイッチ経由で繋ぎ、中央機を遅延ボックスとして使う構成。中央機 (B機) の物理NIC に直接pcapする。
+
+### 構成
+
+```
+                       ┌────────────────────────────┐
+                       │   L2 Switch (VLAN対応)      │
+                       └─┬────────┬──────────┬─────┘
+                  VLAN 2 │ VLAN 6 │ VLAN 3   │
+                  access │ tagged │ access   │
+                         │ tagged │          │
+                ┌────────┘  trunk └─────┐    │
+                │                       │    │
+        ┌───────┴──┐         ┌──────────┴────┴──┐         ┌──────────┐
+        │  Earth   │         │   Delay box (B)   │         │   Mars   │
+        │192.168.2.1│        │ enp1s0  enp2s0    │         │192.168.2.2│
+        └──────────┘         │  mgmt   data plane│         └──────────┘
+                             │   .4    (no IP)   │
+                             └───────────────────┘
+
+  VLAN 2: Earth ↔ delay (data, 192.168.2.0/24)
+  VLAN 3: Mars  ↔ delay (data, 192.168.2.0/24 ← 同じサブネット)
+  VLAN 6: mgmt 全機 (192.168.100.0/24)
+```
+
+Earth と Mars は IP的に同じ `/24` だが、L2では別 VLAN に分離されており delay box が L2透過にフレームを橋渡し（遅延付きで）する。
+
+### スイッチ側の設定（前提）
+
+| 接続先 | switchport モード | VLAN |
+|---|---|---|
+| Earth host | access | VLAN 2 |
+| Mars host | access | VLAN 3 |
+| Delay box `enp1s0` (mgmt) | trunk | VLAN 6 tagged |
+| Delay box `enp2s0` (data) | trunk | VLAN 2, 3 tagged |
+| 他機の mgmt port | trunk | VLAN 6 tagged |
+
+### B機 セットアップ手順
+
+#### 1. リポジトリ取得 + Netplan 設定（mgmt IP）
+
+```bash
+git clone https://github.com/shawsuzuki/InterPlanetary-DelayMaker.git
+cd InterPlanetary-DelayMaker
+
+sudo cp bare-metal/netplan/2nic.yaml /etc/netplan/01-delaybox.yaml
+sudo chmod 600 /etc/netplan/01-delaybox.yaml
+sudo nano /etc/netplan/01-delaybox.yaml     # IP・GW・DNS・NIC名を実機に合わせる
+sudo netplan apply
+```
+
+これで mgmt（VLAN 6 tagged → `enp1s0.6`）に `192.168.100.4/24` がつき ssh 到達可能になる。
+
+| ファイル | 用途 |
+|---|---|
+| [bare-metal/netplan/2nic.yaml](bare-metal/netplan/2nic.yaml) | enp1s0=mgmt(VLAN 6), enp2s0=data plane（推奨） |
+| [bare-metal/netplan/1nic.yaml](bare-metal/netplan/1nic.yaml) | enp2s0 1本に VLAN 2/3/6 全集約 |
+
+> データプレーン NIC・サブIF には **IP を振らない**（L2透過の前提）。VLAN 2/3 用サブIF (`enp2s0.2` / `enp2s0.3`) は `boot.sh` が動的に生成するので netplan には書かない。
+
+#### 2. `.env` で NIC と VLAN を指定
+
+```bash
+cp bare-metal/.env.example .env
+nano .env
+```
+
+1本トランク構成（推奨）の最小設定:
+
+```bash
+EARTH_IFACE=enp2s0
+MARS_IFACE=enp2s0
+EARTH_VLAN=2
+MARS_VLAN=3
+DELAY_EARTH_TO_MARS=10
+DELAY_MARS_TO_EARTH=10
+```
+
+#### 3. 初回起動
+
+```bash
+sudo ./bare-metal/setup.sh
+```
+
+これで Dockerイメージビルド → NIC設定 → サブIF生成 → Redis/delaybox/dashboard 起動。
+
+**ダッシュボード**: `http://192.168.100.4:8080`
+
+#### 4. 自動起動 (systemd) を有効化
+
+```bash
+sudo ./bare-metal/install-systemd.sh
+```
+
+再起動後も自動でNIC再構成 + コンテナ起動する。
+
+### エンドポイント側 (Earth / Mars) の設定
+
+それぞれの host のスイッチポートが access VLAN 2 / 3 なら、ホスト側はタグなしで `192.168.2.x/24` を載せるだけ。例:
+
+```bash
+# Earth ホスト
+sudo ip addr add 192.168.2.1/24 dev <NIC>
+sudo ip link set <NIC> up
+
+# Mars ホスト
+sudo ip addr add 192.168.2.2/24 dev <NIC>
+sudo ip link set <NIC> up
+```
+
+永続化は Netplan/NetworkManager 等で。
+
+### 動作確認
+
+B機で:
+
+```bash
+# サブIF が作成されていること
+ip -d link show enp2s0.2          # vlan id 2 が見える
+ip -d link show enp2s0.3          # vlan id 3 が見える
+ip -br addr show enp2s0           # IP無し（生NICには付けない）
+
+# トランクから VLAN 2/3 tagged フレームが届いていること
+sudo tcpdump -nei enp2s0 -e vlan -c 20
+
+# delaybox のキャプチャ
+docker compose -f docker-compose.bare.yml logs -f delaybox
+
+# 状態確認
+sudo systemctl status delaybox
+journalctl -u delaybox -f
+```
+
+Earth ホストから:
+
+```bash
+# 10秒遅延設定なら ARP往復 + ICMP往復 で約40秒で初応答
+ping 192.168.2.2
+```
+
+### 本番運用 (初回セットアップ後の日常操作)
+
+初回 `setup.sh` + `install-systemd.sh` を済ませてあれば、再起動後は自動で起動する。手動操作は systemd で:
+
+```bash
+sudo systemctl start delaybox       # 起動
+sudo systemctl stop delaybox        # 停止 (compose down も実行)
+sudo systemctl restart delaybox     # .env 変更後など
+sudo systemctl status delaybox      # 状態確認
+journalctl -u delaybox -f           # ログ追跡
+```
+
+**ダッシュボード**: `http://<B機mgmt-IP>:8080` （例: http://192.168.100.4:8080）
+
+### コールドスタート（電源オフ → 再開の最短手順）
+
+展示の朝など、一度電源を落としたあとの復帰手順。初回の `setup.sh` + `install-systemd.sh` が済んでいれば、基本は **電源を入れて待つだけ**。
+
+1. **3台の電源を入れる**（Earth / Delay box(B機) / Mars）。B機は systemd が自動で NIC 再設定＋コンテナ起動するので **30〜60秒待つ**。
+
+2. **B機が起動したか確認**
+   ```bash
+   sudo systemctl status delaybox                  # active なら OK
+   docker compose -f docker-compose.bare.yml ps    # redis / delaybox / dashboard が Up
+   ```
+
+3. **遅延値を確認**（再起動すると `.env` の初期値が再適用され、キューは空で始まる）
+   ```bash
+   docker exec redis redis-cli MGET config:delay_to_mars config:delay_to_earth
+   # 想定値（例: "240" "240"）ならOK。違えば .env を直して  sudo systemctl restart delaybox
+   ```
+   > 恒久的なデフォルトは `.env` の `DELAY_EARTH_TO_MARS` / `DELAY_MARS_TO_EARTH`。Redis CLI やダッシュボードでの変更は「実行中の値」なので、再起動すると `.env` 値に戻る。
+
+4. **Earth / Mars のIP**（Netplan等で永続化済みなら不要。していなければ再設定）
+   ```bash
+   sudo ip addr add 192.168.2.1/24 dev <NIC> && sudo ip link set <NIC> up   # Earth
+   sudo ip addr add 192.168.2.2/24 dev <NIC> && sudo ip link set <NIC> up   # Mars
+   ```
+
+5. **static ARP**（遅延が60秒超なら必須。再起動で ARP テーブルは消える）
+   ARP固定をサービス化していれば各ホスト起動時に自動投入される。手動なら相手のMACを入れる（MACは `ip link show <NIC>` で確認）:
+   ```bash
+   sudo ip neigh replace 192.168.2.2 lladdr <MarsのMAC>  dev <NIC> nud permanent   # Earth で
+   sudo ip neigh replace 192.168.2.1 lladdr <EarthのMAC> dev <NIC> nud permanent   # Mars で
+   ```
+
+6. **疎通確認**
+   ```bash
+   docker exec redis redis-cli ZCARD delay:to_mars     # パケットが積まれていくか
+   ```
+   ダッシュボード: `http://192.168.100.4:8080`
+
+> 自動起動が効いていない／手動で上げたいときは `sudo systemctl start delaybox`（systemd未導入なら `sudo ./bare-metal/boot.sh`）。
+
+### 遅延時間の変更
+
+#### 方法1: ダッシュボード (推奨)
+
+ブラウザで `http://<B機>:8080` を開く:
+- **Settings タブ → Mars Delay**: Demo (5s) / Closest (182s) / Farthest (1338s) プリセット
+- **Settings タブ → Dynamic Delay**: 連続的に増減（例: 100s → 1338s を毎秒+5s で変化）でリアルな軌道変化を再現
+- 設定変更は1秒以内に反映、再起動不要
+
+#### 方法2: Redis CLI (B機上)
+
+```bash
+# 火星: 最接近 (3分2秒 = 182秒)
+docker exec redis redis-cli SET config:delay_to_mars 182
+docker exec redis redis-cli SET config:delay_to_earth 182
+
+# 火星: 最遠 (22分18秒 = 1338秒)
+docker exec redis redis-cli SET config:delay_to_mars 1338
+docker exec redis redis-cli SET config:delay_to_earth 1338
+
+# デモ用 (10秒)
+docker exec redis redis-cli SET config:delay_to_mars 10
+docker exec redis redis-cli SET config:delay_to_earth 10
+
+# 現在値の確認
+docker exec redis redis-cli GET config:delay_to_mars
+```
+
+変更は1秒以内に delaybox が拾って反映。
+
+#### 方法3: 起動時のデフォルト値変更
+
+repo root の `.env` を編集して `systemctl restart delaybox`:
+```bash
+DELAY_EARTH_TO_MARS=600
+DELAY_MARS_TO_EARTH=600
+```
+
+### その他のコマンド
+
+```bash
+# キューを全クリア（過去パケット破棄）
+docker exec redis redis-cli DEL delay:to_mars delay:to_earth
+# またはダッシュボードの "Flush All Queues" ボタン
+
+# 静的ARP（Earth/Mars 各ホスト、long delay 時必須）
+# Earth で
+sudo ip neigh replace <相手IP> lladdr <相手MAC> dev vlan.2 nud permanent
+
+# アンインストール
+sudo ./bare-metal/install-systemd.sh --uninstall
+sudo docker compose -f docker-compose.bare.yml down -v
+```
+
+> **長時間遅延の注意**: Linux のARPテーブルは60秒で老化するため、遅延が60秒を超える場合は両ホストで **static ARP (`nud permanent`)** を必ず設定する。設定しないと60秒ごとに数十秒間 ping が `Destination Host Unreachable` になる。
+
+### トラブルシューティング (実機モード)
+
+| 症状 | 確認 |
+|---|---|
+| ssh が通らない | `netplan apply` 済み? mgmt スイッチポートで VLAN 6 tagged 許可済み? |
+| ping が通らない | `sudo tcpdump -nei enp2s0 -e vlan` で VLAN 2/3 tagged フレーム流れてるか / `docker logs delaybox` で `Queued` |
+| サブIFができない | `ip link show enp2s0` で UP か / `journalctl -u delaybox` で boot.sh のログ |
+| 再起動後動かない | `systemctl status delaybox` / `.env` が repo root にあるか |
+| 遅延が効かない | `docker exec redis redis-cli GET config:delay_to_mars` |
+
 ## 動作確認
 
 ```bash
@@ -153,10 +415,21 @@ docker compose down -v && docker compose up -d --build
 .
 ├── README.md               # このファイル
 ├── CLAUDE.md               # Claude Code 用コンテキスト
-├── docker-compose.yml      # コンテナ定義
+├── docker-compose.yml      # コンテナ定義（Docker模擬モード）
+├── docker-compose.bare.yml # 実機モード（host network + 物理NIC）
+├── bare-metal/
+│   ├── setup.sh            # 初回セットアップ (.env生成 + build + boot.sh)
+│   ├── boot.sh             # 起動毎 NIC再設定 + compose up (systemdからも使用)
+│   ├── install-systemd.sh  # systemd unit インストール/アンインストール
+│   ├── delaybox.service    # systemd unit テンプレート
+│   ├── .env.example        # NIC名・VLAN・遅延初期値のテンプレート
+│   └── netplan/
+│       ├── 2nic.yaml       # 2NIC構成: mgmt VLAN 6 tagged + data plane
+│       └── 1nic.yaml       # 1NIC構成: VLAN 2/3/6 全部 tagged で1本に集約
 ├── delaybox/
 │   ├── Dockerfile          # Alpine + Go + libpcap
-│   ├── entrypoint.sh       # veth ペア設定（Mars必須, Moon自動検出）
+│   ├── entrypoint.sh       # Docker模擬モード用 veth pair 設定
+│   ├── entrypoint-bare.sh  # 実機モード用 (env→flag変換のみ)
 │   ├── go.mod / go.sum     # Go モジュール
 │   ├── main.go             # L2遅延デーモン（link抽象化）
 │   └── main_test.go        # ユニットテスト
